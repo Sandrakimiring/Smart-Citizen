@@ -1,0 +1,23 @@
+# conda activate smartcitizen
+
+python-dotenv
+pypdf
+
+langchain
+langchain-community
+langchain-core
+langchain-text-splitters
+langchain-ollama
+
+chromadb
+tiktoken
+
+pdf2image
+pytesseract
+Pillow
+
+sentence-transformers
+langdetect
+
+huggingface_hub
+transformers
