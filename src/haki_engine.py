@@ -7,8 +7,17 @@ Answers questions about official Kenyan documents using only verified sources.
 
 from dataclasses import dataclass
 from typing import Literal
+import re
 
-from .config import SUPPORTED_LANGUAGES
+from langchain_ollama import OllamaLLM
+
+from .config import (
+    REFUSAL_TEXT,
+    SUPPORTED_LANGUAGES,
+    TRANSLATION_MODEL,
+    USE_OPENAI_FOR_TRANSLATION,
+    OPENAI_API_KEY,
+)
 from .vector_store import get_embeddings, get_vector_store
 from .rag_engine import HakiRAGEngine
 from .language import detect_language
@@ -22,7 +31,7 @@ class HakiResponse:
     """Structured response from the Haki engine."""
 
     answer: str
-    sources: list[dict]  # [{"document_title": str, "page": str}]
+    sources: list[dict]  # [{"document_title": str, "page": str, "snippet"?: str}]
     supported: bool
     language_used: str
     input_language_detected: str
@@ -33,7 +42,10 @@ class HakiResponse:
             return {
                 "answer": self.answer,
                 "sources": [
-                    f"{s['document_title']} — Page {s['page']}"
+                    (
+                        f"{s['document_title']} — Page {s['page']}"
+                        + (f' — "{s.get("snippet", "")}"' if s.get("snippet") else "")
+                    )
                     for s in self.sources
                 ],
                 "supported": True,
@@ -52,10 +64,64 @@ class HakiSovereignEngine:
     Use ask() to query official documents. Returns structured answers with citations.
     """
 
+    _instance = None
+
     def __init__(self, force_rebuild: bool = False):
         self.embeddings = get_embeddings()
         self.vector_store = get_vector_store(self.embeddings, force_rebuild=force_rebuild)
-        self.rag = HakiRAGEngine(self.vector_store)
+
+        # Separate model for translation (efficiency) — falls back to main model if unavailable
+        translation_llm = None
+        try:
+            translation_llm = OllamaLLM(model=TRANSLATION_MODEL)
+        except Exception:
+            translation_llm = None
+
+        self.rag = HakiRAGEngine(self.vector_store, translation_llm=translation_llm)
+
+        # In-memory response cache (demo/perf)
+        self._cache: dict[tuple[str, str], dict] = {}
+
+    @classmethod
+    def get_instance(cls, force_rebuild: bool = False) -> "HakiSovereignEngine":
+        """Get or create the singleton instance."""
+        if cls._instance is None or force_rebuild:
+            cls._instance = cls(force_rebuild=force_rebuild)
+        return cls._instance
+
+    @staticmethod
+    def _normalize_question(q: str) -> str:
+        q = (q or "").strip().lower()
+        q = re.sub(r"\s+", " ", q)
+        return q
+
+    def _translate_query_to_english(self, question: str, detected_lang: str) -> str:
+        """Translate non-English queries to English for better retrieval."""
+        if detected_lang == "en":
+            return question
+
+        # Use OpenAI for query translation (recommended for best accuracy)
+        if USE_OPENAI_FOR_TRANSLATION and OPENAI_API_KEY:
+            from openai import OpenAI
+
+            client = OpenAI(api_key=OPENAI_API_KEY)
+
+            lang_name = "Kiswahili" if detected_lang == "sw" else "Sheng"
+            prompt = f"""Translate this question from {lang_name} to English. Keep it concise and clear.
+
+{lang_name}: {question}
+
+English:"""
+
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+            )
+            return response.choices[0].message.content.strip()
+
+        # Fallback: use question as-is (retrieval may be weaker)
+        return question
 
     def ask(
         self,
@@ -74,22 +140,45 @@ class HakiSovereignEngine:
         Returns:
             HakiResponse with answer, sources, and metadata.
         """
+        # Detect input language
+        input_lang = detect_language(question) if auto_detect_language else "en"
+
+        # Determine output language
         if language is None and auto_detect_language:
-            language = detect_language(question)
+            language = input_lang
         if language is None or language not in SUPPORTED_LANGUAGES:
             language = "en"
 
-        result = self.rag.answer(question, output_language=language)
+        cache_key = (self._normalize_question(question), language)
+        if cache_key in self._cache:
+            cached = self._cache[cache_key]
+            return HakiResponse(
+                answer=cached["answer"],
+                sources=cached["sources"],
+                supported=cached["supported"],
+                language_used=language,
+                input_language_detected=input_lang,
+            )
+
+        # CRITICAL FIX: Translate query to English for retrieval
+        search_query = self._translate_query_to_english(question, input_lang)
+
+        # Use English query for retrieval, but output in requested language
+        result = self.rag.answer(search_query, output_language=language)
+
+        # Cache only supported answers (and deterministic refusals)
+        if result["answer"].strip() == REFUSAL_TEXT or result.get("supported") is True:
+            self._cache[cache_key] = result
 
         return HakiResponse(
             answer=result["answer"],
             sources=result["sources"],
             supported=result["supported"],
             language_used=language,
-            input_language_detected=detect_language(question) if auto_detect_language else "en",
+            input_language_detected=input_lang,
         )
 
 
 def create_engine(force_rebuild: bool = False) -> HakiSovereignEngine:
-    """Factory to create and return the Haki engine."""
-    return HakiSovereignEngine(force_rebuild=force_rebuild)
+    """Factory to create and return the Haki engine (Singleton)."""
+    return HakiSovereignEngine.get_instance(force_rebuild=force_rebuild)

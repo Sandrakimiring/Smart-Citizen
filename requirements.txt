@@ -21,3 +21,7 @@ langdetect
 
 huggingface_hub
 transformers
+
+pdf2image
+langdetect
+

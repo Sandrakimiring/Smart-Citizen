@@ -1,10 +1,7 @@
-"""Vector store: Chroma with multi-document support."""
-
 from pathlib import Path
-
 from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import HuggingFaceEmbeddings
-
+# from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from .config import DB_DIR, COLLECTION_NAME, EMBEDDING_MODEL
 
 
@@ -44,4 +41,5 @@ def get_vector_store(embeddings: HuggingFaceEmbeddings, force_rebuild: bool = Fa
         if not docs:
             raise ValueError("No documents found to build vector store")
         return build_vector_store(docs, embeddings)
+            
     return load_vector_store(embeddings)

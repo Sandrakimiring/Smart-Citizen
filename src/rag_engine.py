@@ -1,17 +1,28 @@
-"""RAG engine with anti-hallucination and structured citations."""
+"""RAG engine with anti-hallucination, confidence gating, and citations."""
 
+import re
+# from langchain_community.llms import Ollama
 from langchain_ollama import OllamaLLM
+# from langchain.prompts import PromptTemplate
 from langchain_core.prompts import PromptTemplate
+# from langchain.vectorstores import VectorStore
 from langchain_core.vectorstores import VectorStore
 
-from .config import TOP_K_CHUNKS, OLLAMA_MODEL
+from .config import (
+    MAX_CHUNK_CHARS_IN_PROMPT,
+    MIN_MEANINGFUL_CHUNK_CHARS,
+    MIN_MEANINGFUL_CHUNKS,
+    OLLAMA_MODEL,
+    REFUSAL_TEXT,
+    TOP_K_CHUNKS,
+)
 
 # Anti-hallucination system prompt: answer ONLY from context, refuse if not found
 RAG_PROMPT = """You are Haki Sovereign AI - a trusted assistant for Kenyan citizens. You answer questions about official government documents (Constitution of Kenya 2010, Finance Bill 2025) using ONLY the provided context.
 
 CRITICAL RULES:
 1. Answer ONLY using information from the context below. Do NOT guess or invent information.
-2. If the context does not contain enough information to answer the question, respond EXACTLY with: "I can't find that information in the official documents provided."
+2. If the context does not contain enough information to answer the question, respond EXACTLY with: "{refusal_text}"
 3. Prioritize correctness over completeness. A short correct answer is better than a long incorrect one.
 4. Use plain language that a non-technical citizen can understand.
 5. Keep your answer concise (2-4 sentences typically).
@@ -22,6 +33,38 @@ Context from official documents:
 Question: {question}
 
 Answer (plain language only, no citations in text):"""
+
+
+def _clean_text(text: str) -> str:
+    """Normalize whitespace and remove excessive blank lines."""
+    text = text.replace("\u00a0", " ")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _trim_for_prompt(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "…"
+
+
+def _meaningful(doc) -> bool:
+    content = _clean_text(doc.page_content or "")
+    return len(content) >= MIN_MEANINGFUL_CHUNK_CHARS
+
+
+def _prepare_docs(docs: list) -> list:
+    """Clean and trim retrieved docs, dropping near-empty/noisy ones."""
+    prepared = []
+    for doc in docs:
+        cleaned = _clean_text(doc.page_content or "")
+        if not cleaned:
+            continue
+        # store cleaned for snippets / prompt
+        doc.page_content = _trim_for_prompt(cleaned, MAX_CHUNK_CHARS_IN_PROMPT)
+        prepared.append(doc)
+    return prepared
 
 
 def _format_context(docs: list) -> str:
@@ -35,8 +78,15 @@ def _format_context(docs: list) -> str:
     return "\n\n---\n\n".join(parts)
 
 
+def _make_snippet(text: str, min_len: int = 160, max_len: int = 240) -> str:
+    text = _clean_text(text)
+    if len(text) <= max_len:
+        return text
+    return text[:max_len].rstrip() + "…"
+
+
 def _extract_citations(docs: list) -> list[dict]:
-    """Extract citation info from source documents."""
+    """Extract citation info from source documents (with evidence snippet)."""
     seen = set()
     citations = []
     for doc in docs:
@@ -46,22 +96,28 @@ def _extract_citations(docs: list) -> list[dict]:
         key = (title, page)
         if key not in seen:
             seen.add(key)
-            citations.append({"document_title": title, "page": page})
+            citations.append(
+                {
+                    "document_title": title,
+                    "page": page,
+                    "snippet": _make_snippet(doc.page_content or ""),
+                }
+            )
     return citations
 
 
 def _is_refusal(answer: str) -> bool:
-    """Check if the model refused to answer (anti-hallucination response)."""
-    refusal_phrase = "I can't find that information in the official documents provided"
-    return refusal_phrase.lower() in answer.lower()
+    """Deterministic refusal detection (exact match)."""
+    return (answer or "").strip() == REFUSAL_TEXT
 
 
 class HakiRAGEngine:
     """RAG engine with anti-hallucination and citations."""
 
-    def __init__(self, vector_store: VectorStore):
+    def __init__(self, vector_store: VectorStore, llm=None, translation_llm=None):
         self.vector_store = vector_store
-        self.llm = OllamaLLM(model=OLLAMA_MODEL)
+        self.llm = llm or OllamaLLM(model=OLLAMA_MODEL)
+        self.translation_llm = translation_llm
         self.retriever = vector_store.as_retriever(search_kwargs={"k": TOP_K_CHUNKS})
 
     def retrieve(self, question: str):
@@ -86,16 +142,20 @@ class HakiRAGEngine:
             docs = self.retrieve(question)
 
         if not docs:
-            return {
-                "answer": "I can't find that information in the official documents provided.",
-                "sources": [],
-                "supported": False,
-            }
+            return {"answer": REFUSAL_TEXT, "sources": [], "supported": False}
+
+        docs = _prepare_docs(docs)
+
+        # Retrieval confidence gate (refuse early if evidence is weak)
+        meaningful = [d for d in docs if _meaningful(d)]
+        if len(meaningful) < MIN_MEANINGFUL_CHUNKS:
+            return {"answer": REFUSAL_TEXT, "sources": [], "supported": False}
 
         context = _format_context(docs)
         prompt = PromptTemplate(
             template=RAG_PROMPT,
             input_variables=["context", "question"],
+            partial_variables={"refusal_text": REFUSAL_TEXT},
         )
 
         chain = prompt | self.llm
@@ -104,15 +164,12 @@ class HakiRAGEngine:
         citations = _extract_citations(docs)
 
         if not supported:
-            return {
-                "answer": "I can't find that information in the official documents provided.",
-                "sources": [],
-                "supported": False,
-            }
+            return {"answer": REFUSAL_TEXT, "sources": [], "supported": False}
 
         # Translate to Kiswahili/Sheng only for supported answers
         if output_language != "en":
-            raw_answer = self._translate_answer(raw_answer, output_language, question, self.llm)
+            translation_llm = self.translation_llm or self.llm
+            raw_answer = self._translate_answer(raw_answer, output_language, question, translation_llm)
 
         return {
             "answer": raw_answer,
