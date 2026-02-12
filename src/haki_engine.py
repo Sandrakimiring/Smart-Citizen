@@ -162,7 +162,6 @@ English:"""
 
         # CRITICAL FIX: Translate query to English for retrieval
         search_query = self._translate_query_to_english(question, input_lang)
-
         # Use English query for retrieval, but output in requested language
         result = self.rag.answer(search_query, output_language=language)
 

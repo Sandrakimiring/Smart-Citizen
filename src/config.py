@@ -1,6 +1,12 @@
 """Configuration for Haki Sovereign AI Engine."""
 
 from pathlib import Path
+import os 
+from dotenv import load_dotenv
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(PROJECT_ROOT / ".env")
+
 
 # Paths
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
