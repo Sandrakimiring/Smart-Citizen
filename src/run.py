@@ -65,7 +65,7 @@ def main():
         print("\n" + "=" * 60)
         print(f"Q: {q}")
         print("=" * 60)
-        resp = engine.ask(q, language=args.language)
+        resp = engine.ask(q, language=args.language if args.language != "en" else None, auto_detect_language=True)
         out = resp.format_output()
         print("Answer:", out["answer"])
         print("Sources:", out["sources"])
