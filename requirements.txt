@@ -25,3 +25,5 @@ transformers
 pdf2image
 langdetect
 
+fastapi
+uvicorn[standard]
