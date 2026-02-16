@@ -2,33 +2,25 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.2.2
 
-python-dotenv
-pypdf
+python-dotenv==1.0.1
+pypdf==4.3.1
 
-langchain
-langchain-community
-langchain-core
-langchain-text-splitters
-langchain-ollama
+fastapi==0.115.7
+uvicorn[standard]==0.30.6
 
-chromadb
-tiktoken
+langchain==0.2.17
+langchain-community==0.2.17
+langchain-core==0.2.41
+langchain-text-splitters==0.2.4
+langchain-ollama==0.1.0
+langchain-openai==0.1.25
 
-pdf2image
-pytesseract
-Pillow
+chromadb==0.5.5
+tiktoken==0.7.0
 
+pdf2image==1.17.0
+pytesseract==0.3.13
+Pillow==10.4.0
 
 sentence-transformers==2.3.1
-langdetect
-
-huggingface_hub
-transformers
-
-pdf2image
-langdetect
-
-fastapi
-uvicorn[standard]
-
-langchain-openai 
+langdetect==1.0.9
