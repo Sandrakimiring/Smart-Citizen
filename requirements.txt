@@ -27,3 +27,5 @@ langdetect
 
 fastapi
 uvicorn[standard]
+
+langchain-openai 

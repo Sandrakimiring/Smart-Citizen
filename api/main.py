@@ -32,6 +32,7 @@ async def startup_event():
     """Load engine on startup."""
     global engine
     print("Loading Haki Sovereign AI Engine...")
+    is_railway = os.getenv("RAILWAY_ENVIRONMENT") is not None
     engine = create_engine()
     print("Engine loaded successfully!")
 
@@ -182,3 +183,5 @@ async def get_stats():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+    # uvicorn api.main:app --reload

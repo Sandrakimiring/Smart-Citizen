@@ -1,11 +1,8 @@
 """RAG engine with anti-hallucination, confidence gating, and citations."""
 
 import re
-# from langchain_community.llms import Ollama
 from langchain_ollama import OllamaLLM
-# from langchain.prompts import PromptTemplate
 from langchain_core.prompts import PromptTemplate
-# from langchain.vectorstores import VectorStore
 from langchain_core.vectorstores import VectorStore
 
 from .config import (
@@ -13,6 +10,7 @@ from .config import (
     MIN_MEANINGFUL_CHUNK_CHARS,
     MIN_MEANINGFUL_CHUNKS,
     OLLAMA_MODEL,
+    OPENAI_API_KEY,
     REFUSAL_TEXT,
     TOP_K_CHUNKS,
 )
@@ -23,16 +21,17 @@ RAG_PROMPT = """You are Haki Sovereign AI - a trusted assistant for Kenyan citiz
 CRITICAL RULES:
 1. Answer ONLY using information from the context below. Do NOT guess or invent information.
 2. If the context does not contain enough information to answer the question, respond EXACTLY with: "{refusal_text}"
-3. Prioritize correctness over completeness. A short correct answer is better than a long incorrect one.
-4. Use plain language that a non-technical citizen can understand.
-5. Keep your answer concise (2-4 sentences typically).
+3. Extract ALL specific details from the context (numbers, requirements, dates, procedures).
+4. If the context mentions "prescribed by" or "according to" something else, state that clearly.
+5. Use plain language that a non-technical citizen can understand.
+6. Keep your answer clear and complete (2-5 sentences).
 
 Context from official documents:
 {context}
 
 Question: {question}
 
-Answer (plain language only, no citations in text):"""
+Answer (include all relevant details from the context):"""
 
 
 def _clean_text(text: str) -> str:
@@ -78,7 +77,7 @@ def _format_context(docs: list) -> str:
     return "\n\n---\n\n".join(parts)
 
 
-def _make_snippet(text: str, min_len: int = 160, max_len: int = 240) -> str:
+def _make_snippet(text: str, min_len: int = 160, max_len: int = 400) -> str:
     text = _clean_text(text)
     if len(text) <= max_len:
         return text
@@ -116,8 +115,29 @@ class HakiRAGEngine:
 
     def __init__(self, vector_store: VectorStore, llm=None, translation_llm=None):
         self.vector_store = vector_store
-        self.llm = llm or OllamaLLM(model=OLLAMA_MODEL)
-        self.translation_llm = translation_llm
+        
+        # Use OpenAI if API key available (for cloud deployment)
+        if OPENAI_API_KEY and not llm:
+            try:
+                from langchain_openai import ChatOpenAI
+                self.llm = ChatOpenAI(
+                    model="gpt-4o-mini",
+                    api_key=OPENAI_API_KEY,
+                    temperature=0.3
+                )
+                self.translation_llm = self.llm
+                print(" Using OpenAI for LLM and translation")
+            except ImportError:
+                print("langchain-openai not installed, falling back to Ollama")
+                self.llm = OllamaLLM(model=OLLAMA_MODEL)
+                self.translation_llm = translation_llm
+                print("Using Ollama for LLM")
+        else:
+            # No OpenAI key or llm provided - use Ollama
+            self.llm = llm or OllamaLLM(model=OLLAMA_MODEL)
+            self.translation_llm = translation_llm
+            print("Using Ollama for LLM (no API key)")
+        
         self.retriever = vector_store.as_retriever(search_kwargs={"k": TOP_K_CHUNKS})
 
     def retrieve(self, question: str):
@@ -159,7 +179,13 @@ class HakiRAGEngine:
         )
 
         chain = prompt | self.llm
-        raw_answer = chain.invoke({"context": context, "question": question}).strip()
+        raw_answer = chain.invoke({"context": context, "question": question})
+        
+        # Handle different response types (string or AIMessage)
+        if hasattr(raw_answer, 'content'):
+            raw_answer = raw_answer.content
+        raw_answer = str(raw_answer).strip()
+        
         supported = not _is_refusal(raw_answer)
         citations = _extract_citations(docs)
 
