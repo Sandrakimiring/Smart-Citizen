@@ -1,4 +1,6 @@
 # conda activate smartcitizen
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.2.2
 
 python-dotenv
 pypdf
@@ -16,7 +18,8 @@ pdf2image
 pytesseract
 Pillow
 
-sentence-transformers
+
+sentence-transformers==2.3.1
 langdetect
 
 huggingface_hub
