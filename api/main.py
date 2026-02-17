@@ -31,9 +31,13 @@ engine = None
 async def startup_event():
     """Load engine on startup."""
     global engine
-    print("Loading Haki Sovereign AI Engine...")
-    engine = create_engine()
-    print("Engine loaded successfully!")
+    print("🚀 Loading Haki Sovereign AI Engine...")
+    try:
+        engine = create_engine()
+        print("✅ Engine loaded successfully!")
+    except Exception as e:
+        print(f"❌ Failed to load engine: {e}")
+        raise
 
 # Request/Response models
 class AskRequest(BaseModel):
@@ -182,3 +186,5 @@ async def get_stats():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+    # uvicorn api.main:app --reload

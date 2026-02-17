@@ -1,18 +1,15 @@
 """RAG engine with anti-hallucination, confidence gating, and citations."""
 
 import re
-# from langchain_community.llms import Ollama
-from langchain_ollama import OllamaLLM
-# from langchain.prompts import PromptTemplate
 from langchain_core.prompts import PromptTemplate
-# from langchain.vectorstores import VectorStore
 from langchain_core.vectorstores import VectorStore
+from langchain_openai import ChatOpenAI
 
 from .config import (
     MAX_CHUNK_CHARS_IN_PROMPT,
     MIN_MEANINGFUL_CHUNK_CHARS,
     MIN_MEANINGFUL_CHUNKS,
-    OLLAMA_MODEL,
+    OPENAI_API_KEY,
     REFUSAL_TEXT,
     TOP_K_CHUNKS,
 )
@@ -23,16 +20,17 @@ RAG_PROMPT = """You are Haki Sovereign AI - a trusted assistant for Kenyan citiz
 CRITICAL RULES:
 1. Answer ONLY using information from the context below. Do NOT guess or invent information.
 2. If the context does not contain enough information to answer the question, respond EXACTLY with: "{refusal_text}"
-3. Prioritize correctness over completeness. A short correct answer is better than a long incorrect one.
-4. Use plain language that a non-technical citizen can understand.
-5. Keep your answer concise (2-4 sentences typically).
+3. Extract ALL specific details from the context (numbers, requirements, dates, procedures).
+4. If the context mentions "prescribed by" or "according to" something else, state that clearly.
+5. Use plain language that a non-technical citizen can understand.
+6. Keep your answer clear and complete (2-5 sentences).
 
 Context from official documents:
 {context}
 
 Question: {question}
 
-Answer (plain language only, no citations in text):"""
+Answer (include all relevant details from the context):"""
 
 
 def _clean_text(text: str) -> str:
@@ -61,7 +59,6 @@ def _prepare_docs(docs: list) -> list:
         cleaned = _clean_text(doc.page_content or "")
         if not cleaned:
             continue
-        # store cleaned for snippets / prompt
         doc.page_content = _trim_for_prompt(cleaned, MAX_CHUNK_CHARS_IN_PROMPT)
         prepared.append(doc)
     return prepared
@@ -78,7 +75,7 @@ def _format_context(docs: list) -> str:
     return "\n\n---\n\n".join(parts)
 
 
-def _make_snippet(text: str, min_len: int = 160, max_len: int = 240) -> str:
+def _make_snippet(text: str, max_len: int = 400) -> str:
     text = _clean_text(text)
     if len(text) <= max_len:
         return text
@@ -116,9 +113,14 @@ class HakiRAGEngine:
 
     def __init__(self, vector_store: VectorStore, llm=None, translation_llm=None):
         self.vector_store = vector_store
-        self.llm = llm or OllamaLLM(model=OLLAMA_MODEL)
-        self.translation_llm = translation_llm
+        self.llm = llm or ChatOpenAI(
+            model="gpt-4o-mini",
+            api_key=OPENAI_API_KEY,
+            temperature=0.3,
+        )
+        self.translation_llm = translation_llm or self.llm
         self.retriever = vector_store.as_retriever(search_kwargs={"k": TOP_K_CHUNKS})
+        print("✅ Using OpenAI for LLM and translation")
 
     def retrieve(self, question: str):
         """Retrieve relevant chunks for a question."""
@@ -134,8 +136,8 @@ class HakiRAGEngine:
         Generate an answer with citations. Returns:
         {
             "answer": str,
-            "sources": [{"document_title": str, "page": str}],
-            "supported": bool,  # True if answer is from documents
+            "sources": [{"document_title": str, "page": str, "snippet": str}],
+            "supported": bool,
         }
         """
         if docs is None:
@@ -146,7 +148,7 @@ class HakiRAGEngine:
 
         docs = _prepare_docs(docs)
 
-        # Retrieval confidence gate (refuse early if evidence is weak)
+        # Retrieval confidence gate
         meaningful = [d for d in docs if _meaningful(d)]
         if len(meaningful) < MIN_MEANINGFUL_CHUNKS:
             return {"answer": REFUSAL_TEXT, "sources": [], "supported": False}
@@ -159,17 +161,21 @@ class HakiRAGEngine:
         )
 
         chain = prompt | self.llm
-        raw_answer = chain.invoke({"context": context, "question": question}).strip()
-        supported = not _is_refusal(raw_answer)
-        citations = _extract_citations(docs)
+        raw_answer = chain.invoke({"context": context, "question": question})
 
-        if not supported:
+        # Handle AIMessage or string response
+        if hasattr(raw_answer, "content"):
+            raw_answer = raw_answer.content
+        raw_answer = str(raw_answer).strip()
+
+        if _is_refusal(raw_answer):
             return {"answer": REFUSAL_TEXT, "sources": [], "supported": False}
+
+        citations = _extract_citations(docs)
 
         # Translate to Kiswahili/Sheng only for supported answers
         if output_language != "en":
-            translation_llm = self.translation_llm or self.llm
-            raw_answer = self._translate_answer(raw_answer, output_language, question, translation_llm)
+            raw_answer = self._translate_answer(raw_answer, output_language, question, self.translation_llm)
 
         return {
             "answer": raw_answer,

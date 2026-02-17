@@ -1,29 +1,27 @@
 # conda activate smartcitizen
+# FastAPI
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
 
-python-dotenv
-pypdf
+# LangChain
+langchain>=0.3.0
+langchain-community>=0.3.0
+langchain-core>=0.3.0
+langchain-openai>=0.2.0
+langchain-text-splitters>=0.3.0
 
-langchain
-langchain-community
-langchain-core
-langchain-text-splitters
-langchain-ollama
+# Vector Database
+chromadb>=0.5.0
 
-chromadb
-tiktoken
+# PDF Processing
+pypdf>=3.0.0
+pdfplumber>=0.10.0
 
-pdf2image
-pytesseract
-Pillow
+# Language Processing
+langdetect>=1.0.9
+openai>=1.0.0
+python-dotenv>=1.0.0
 
-sentence-transformers
-langdetect
-
-huggingface_hub
-transformers
-
-pdf2image
-langdetect
-
-fastapi
-uvicorn[standard]
+# Additional LangChain integrations
+langchain-huggingface>=0.1.0
