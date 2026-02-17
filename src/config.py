@@ -1,15 +1,13 @@
 """Configuration for Haki Sovereign AI Engine."""
 
 from pathlib import Path
-import os 
+import os
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
-
 # Paths
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
 DB_DIR = PROJECT_ROOT / "vectorstores" / "haki_sovereign"
 COLLECTION_NAME = "haki_knowledge_base"
@@ -23,8 +21,12 @@ DOCUMENTS = {
     "THE FINANCE BILL 2025 (Compressed Copy)_2.pdf": "Finance Bill 2025",
 }
 
-# Embedding model. Use paraphrase-multilingual-MiniLM-L12-v2 for better Kiswahili retrieval
+# Embedding model (used only for local/HuggingFace fallback)
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+
+# OpenAI
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", None)
+USE_OPENAI_FOR_TRANSLATION = True
 
 # Chunking
 CHUNK_SIZE = 1000
@@ -37,31 +39,21 @@ MIN_MEANINGFUL_CHUNKS = 2
 
 # Retrieval
 TOP_K_CHUNKS = 6
-MIN_RELEVANCE_SCORE = 0.3  # For anti-hallucination threshold
+MIN_RELEVANCE_SCORE = 0.3
 
 # LLM
 OLLAMA_MODEL = "llama3.2"
-TRANSLATION_MODEL = "phi3:mini"  # smaller/faster model for translation (optional)
-
-
-import os
-
-# OpenAI API key 
-# Production will use local Ollama models for data sovereignty
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", None)
-USE_OPENAI_FOR_TRANSLATION = True  
+TRANSLATION_MODEL = "phi3:mini"
 
 # Languages
 SUPPORTED_LANGUAGES = ("en", "sw", "sheng")
 
-# OCR (Windows stability)
-# Set these if OCR fails on Windows (Finance Bill reliability).
-# Example:
-#   TESSERACT_CMD = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-#   POPPLER_BIN = r"C:\poppler\Library\bin"
-TESSERACT_CMD: str | None = None
-POPPLER_BIN: str | None = None
-
-TESSERACT_CMD: str | None = r"C:\Users\Sandra\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
-POPPLER_BIN: str | None = r"C:\poppler-25.12.0\Library\bin"
-
+# OCR - only used locally, not on Render
+TESSERACT_CMD: str | None = os.environ.get(
+    "TESSERACT_CMD",
+    r"C:\Users\Sandra\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
+)
+POPPLER_BIN: str | None = os.environ.get(
+    "POPPLER_BIN",
+    r"C:\poppler-25.12.0\Library\bin"
+)
