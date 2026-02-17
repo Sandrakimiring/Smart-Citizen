@@ -32,7 +32,6 @@ async def startup_event():
     """Load engine on startup."""
     global engine
     print("Loading Haki Sovereign AI Engine...")
-    is_railway = os.getenv("RAILWAY_ENVIRONMENT") is not None
     engine = create_engine()
     print("Engine loaded successfully!")
 

@@ -9,8 +9,6 @@ from dataclasses import dataclass
 from typing import Literal
 import re
 
-from langchain_ollama import OllamaLLM
-
 from .config import (
     REFUSAL_TEXT,
     SUPPORTED_LANGUAGES,
@@ -70,16 +68,20 @@ class HakiSovereignEngine:
         self.embeddings = get_embeddings()
         self.vector_store = get_vector_store(self.embeddings, force_rebuild=force_rebuild)
 
-        # Separate model for translation (efficiency) — falls back to main model if unavailable
+        # Translation LLM - only load Ollama if no OpenAI key (local development)
         translation_llm = None
-        try:
-            translation_llm = OllamaLLM(model=TRANSLATION_MODEL)
-        except Exception:
-            translation_llm = None
+        if not OPENAI_API_KEY:
+            try:
+                from langchain_ollama import OllamaLLM
+                translation_llm = OllamaLLM(model=TRANSLATION_MODEL)
+                print("✅ Using Ollama for translation")
+            except Exception:
+                print("⚠️ Ollama not available, translation disabled")
+                translation_llm = None
 
         self.rag = HakiRAGEngine(self.vector_store, translation_llm=translation_llm)
 
-        # In-memory response cache (demo/perf)
+        # In-memory response cache
         self._cache: dict[tuple[str, str], dict] = {}
 
     @classmethod
@@ -100,7 +102,7 @@ class HakiSovereignEngine:
         if detected_lang == "en":
             return question
 
-        # Use OpenAI for query translation (recommended for best accuracy)
+        # Use OpenAI for query translation
         if USE_OPENAI_FOR_TRANSLATION and OPENAI_API_KEY:
             from openai import OpenAI
 
@@ -120,7 +122,7 @@ English:"""
             )
             return response.choices[0].message.content.strip()
 
-        # Fallback: use question as-is (retrieval may be weaker)
+        # Fallback: use question as-is
         return question
 
     def ask(
@@ -160,12 +162,13 @@ English:"""
                 input_language_detected=input_lang,
             )
 
-        # CRITICAL FIX: Translate query to English for retrieval
+        # Translate query to English for retrieval
         search_query = self._translate_query_to_english(question, input_lang)
+
         # Use English query for retrieval, but output in requested language
         result = self.rag.answer(search_query, output_language=language)
 
-        # Cache only supported answers (and deterministic refusals)
+        # Cache supported answers and deterministic refusals
         if result["answer"].strip() == REFUSAL_TEXT or result.get("supported") is True:
             self._cache[cache_key] = result
 
