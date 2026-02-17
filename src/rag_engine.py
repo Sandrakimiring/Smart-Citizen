@@ -1,15 +1,14 @@
 """RAG engine with anti-hallucination, confidence gating, and citations."""
 
 import re
-from langchain_ollama import OllamaLLM
 from langchain_core.prompts import PromptTemplate
 from langchain_core.vectorstores import VectorStore
+from langchain_openai import ChatOpenAI
 
 from .config import (
     MAX_CHUNK_CHARS_IN_PROMPT,
     MIN_MEANINGFUL_CHUNK_CHARS,
     MIN_MEANINGFUL_CHUNKS,
-    OLLAMA_MODEL,
     OPENAI_API_KEY,
     REFUSAL_TEXT,
     TOP_K_CHUNKS,
@@ -60,7 +59,6 @@ def _prepare_docs(docs: list) -> list:
         cleaned = _clean_text(doc.page_content or "")
         if not cleaned:
             continue
-        # store cleaned for snippets / prompt
         doc.page_content = _trim_for_prompt(cleaned, MAX_CHUNK_CHARS_IN_PROMPT)
         prepared.append(doc)
     return prepared
@@ -77,7 +75,7 @@ def _format_context(docs: list) -> str:
     return "\n\n---\n\n".join(parts)
 
 
-def _make_snippet(text: str, min_len: int = 160, max_len: int = 400) -> str:
+def _make_snippet(text: str, max_len: int = 400) -> str:
     text = _clean_text(text)
     if len(text) <= max_len:
         return text
@@ -115,30 +113,14 @@ class HakiRAGEngine:
 
     def __init__(self, vector_store: VectorStore, llm=None, translation_llm=None):
         self.vector_store = vector_store
-        
-        # Use OpenAI if API key available (for cloud deployment)
-        if OPENAI_API_KEY and not llm:
-            try:
-                from langchain_openai import ChatOpenAI
-                self.llm = ChatOpenAI(
-                    model="gpt-4o-mini",
-                    api_key=OPENAI_API_KEY,
-                    temperature=0.3
-                )
-                self.translation_llm = self.llm
-                print(" Using OpenAI for LLM and translation")
-            except ImportError:
-                print("langchain-openai not installed, falling back to Ollama")
-                self.llm = OllamaLLM(model=OLLAMA_MODEL)
-                self.translation_llm = translation_llm
-                print("Using Ollama for LLM")
-        else:
-            # No OpenAI key or llm provided - use Ollama
-            self.llm = llm or OllamaLLM(model=OLLAMA_MODEL)
-            self.translation_llm = translation_llm
-            print("Using Ollama for LLM (no API key)")
-        
+        self.llm = llm or ChatOpenAI(
+            model="gpt-4o-mini",
+            api_key=OPENAI_API_KEY,
+            temperature=0.3,
+        )
+        self.translation_llm = translation_llm or self.llm
         self.retriever = vector_store.as_retriever(search_kwargs={"k": TOP_K_CHUNKS})
+        print("✅ Using OpenAI for LLM and translation")
 
     def retrieve(self, question: str):
         """Retrieve relevant chunks for a question."""
@@ -154,8 +136,8 @@ class HakiRAGEngine:
         Generate an answer with citations. Returns:
         {
             "answer": str,
-            "sources": [{"document_title": str, "page": str}],
-            "supported": bool,  # True if answer is from documents
+            "sources": [{"document_title": str, "page": str, "snippet": str}],
+            "supported": bool,
         }
         """
         if docs is None:
@@ -166,7 +148,7 @@ class HakiRAGEngine:
 
         docs = _prepare_docs(docs)
 
-        # Retrieval confidence gate (refuse early if evidence is weak)
+        # Retrieval confidence gate
         meaningful = [d for d in docs if _meaningful(d)]
         if len(meaningful) < MIN_MEANINGFUL_CHUNKS:
             return {"answer": REFUSAL_TEXT, "sources": [], "supported": False}
@@ -180,22 +162,20 @@ class HakiRAGEngine:
 
         chain = prompt | self.llm
         raw_answer = chain.invoke({"context": context, "question": question})
-        
-        # Handle different response types (string or AIMessage)
-        if hasattr(raw_answer, 'content'):
+
+        # Handle AIMessage or string response
+        if hasattr(raw_answer, "content"):
             raw_answer = raw_answer.content
         raw_answer = str(raw_answer).strip()
-        
-        supported = not _is_refusal(raw_answer)
-        citations = _extract_citations(docs)
 
-        if not supported:
+        if _is_refusal(raw_answer):
             return {"answer": REFUSAL_TEXT, "sources": [], "supported": False}
+
+        citations = _extract_citations(docs)
 
         # Translate to Kiswahili/Sheng only for supported answers
         if output_language != "en":
-            translation_llm = self.translation_llm or self.llm
-            raw_answer = self._translate_answer(raw_answer, output_language, question, translation_llm)
+            raw_answer = self._translate_answer(raw_answer, output_language, question, self.translation_llm)
 
         return {
             "answer": raw_answer,
