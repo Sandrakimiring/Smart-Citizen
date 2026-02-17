@@ -15,7 +15,7 @@ langchain-text-splitters>=0.3.0
 chromadb>=0.5.0
 
 # PDF Processing
-PyPDF2>=3.0.0
+pypdf>=3.0.0
 pdfplumber>=0.10.0
 
 # Language Processing
