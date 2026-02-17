@@ -49,11 +49,7 @@ TRANSLATION_MODEL = "phi3:mini"
 SUPPORTED_LANGUAGES = ("en", "sw", "sheng")
 
 # OCR - only used locally, not on Render
-TESSERACT_CMD: str | None = os.environ.get(
-    "TESSERACT_CMD",
-    r"C:\Users\Sandra\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
-)
-POPPLER_BIN: str | None = os.environ.get(
-    "POPPLER_BIN",
-    r"C:\poppler-25.12.0\Library\bin"
-)
+# On Windows, set these in .env or environment variables
+# On Render/Linux, these should be None (OCR not supported in cloud deployment)
+TESSERACT_CMD: str | None = os.environ.get("TESSERACT_CMD", None)
+POPPLER_BIN: str | None = os.environ.get("POPPLER_BIN", None)

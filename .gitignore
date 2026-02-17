@@ -27,6 +27,8 @@ Thumbs.db
 # --- Secrets ---
 .env
 .env.*
+!.env.render  # Template file, safe to commit
+!.env.example  # Template file, safe to commit
 *.key
 
 # --- Logs / debug ---
@@ -39,9 +41,18 @@ system_info.txt
 questions.txt
 
 # --- Vector stores / DBs ---
+# Vector stores are excluded (will be rebuilt on Render)
 vectorstores/
 **/chroma.sqlite3
 
-
-vectorstores/*
+# Keep the directory structure
 !vectorstores/.gitkeep
+
+# Important: PDF files in data/raw/ ARE tracked and will be deployed
+# This is necessary for vector store rebuild on Render
+ DEPLOY.md
+ SYSTEM_MAP.md
+ ARCHITECTURE.md
+ FIXES_APPLIED.md
+ DEPLOYMENT_CHECKLIST.md
+ DEPLOYMENT_SUMMARY.md
