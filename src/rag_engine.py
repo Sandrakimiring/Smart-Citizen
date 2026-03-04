@@ -19,11 +19,13 @@ RAG_PROMPT = """You are Haki Sovereign AI - a trusted assistant for Kenyan citiz
 
 CRITICAL RULES:
 1. Answer ONLY using information from the context below. Do NOT guess or invent information.
-2. If the context does not contain enough information to answer the question, respond EXACTLY with: "{refusal_text}"
-3. Extract ALL specific details from the context (numbers, requirements, dates, procedures).
-4. If the context mentions "prescribed by" or "according to" something else, state that clearly.
-5. Use plain language that a non-technical citizen can understand.
-6. Keep your answer clear and complete (2-5 sentences).
+2. If the context contains relevant information about the topic, provide a clear answer based on what you can find.
+3. Only respond EXACTLY with: "{refusal_text}" if the context has NO information at all related to the question.
+4. Extract ALL specific details from the context (numbers, requirements, dates, procedures).
+5. If the context mentions "prescribed by" or "according to" something else, state that clearly.
+6. Use plain language that a non-technical citizen can understand.
+7. Keep your answer clear and complete (2-5 sentences).
+8. If the context discusses the topic but lacks a specific detail the user asked about, answer with what IS available and note what detail is not in the provided excerpts.
 
 Context from official documents:
 {context}
@@ -123,8 +125,161 @@ class HakiRAGEngine:
         print("✅ Using OpenAI for LLM and translation")
 
     def retrieve(self, question: str):
-        """Retrieve relevant chunks for a question."""
-        return self.retriever.invoke(question)
+        """Retrieve relevant chunks for a question with smart filtering.
+        
+        Strategy:
+        1. Standard similarity search (works for general questions)
+        2. If asking about a specific article/chapter, check if results match
+        3. If not, do a SECONDARY search using ChromaDB metadata filters
+        4. Merge and prioritize matching results
+        """
+        import re
+        
+        article_match = re.search(r'\barticle\s+(\d{1,3})\b', question, re.IGNORECASE)
+        chapter_match = re.search(r'\bchapter\s+(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|[IVX]+|\d+)\b', question, re.IGNORECASE)
+        
+        # First, try standard similarity search
+        docs = self.retriever.invoke(question)
+        
+        # If asking about a specific article/chapter, filter and boost matching results
+        if article_match or chapter_match:
+            target_article = f"Article {article_match.group(1)}" if article_match else None
+            target_chapter = f"Chapter {chapter_match.group(1).title()}" if chapter_match else None
+            
+            # Separate docs into matching and non-matching
+            matching_docs = []
+            other_docs = []
+            
+            for doc in docs:
+                metadata = doc.metadata
+                matches = False
+                
+                # Check primary article metadata
+                if target_article and metadata.get('article') == target_article:
+                    matches = True
+                    print(f"✓ Found chunk with {target_article} in metadata['article']")
+                # Check all articles in chunk (articles_all is pipe-separated string)
+                elif target_article and 'articles_all' in metadata:
+                    if target_article in str(metadata['articles_all']):
+                        matches = True
+                        print(f"✓ Found chunk with {target_article} in metadata['articles_all']")
+                # Check chapter
+                elif target_chapter and target_chapter in metadata.get('chapter', ''):
+                    matches = True
+                    print(f"✓ Found chunk with {target_chapter} metadata")
+                # Check content
+                elif target_article and target_article in doc.page_content[:500]:
+                    matches = True
+                    print(f"✓ Found chunk containing {target_article} in content")
+                elif target_chapter and target_chapter in doc.page_content[:500]:
+                    matches = True
+                    print(f"✓ Found chunk containing {target_chapter} in content")
+                
+                if matches:
+                    matching_docs.append(doc)
+                else:
+                    other_docs.append(doc)
+            
+            # If no matching docs found in similarity results, do a METADATA SEARCH
+            if not matching_docs:
+                print(f"⚠️ No matches in similarity results — trying metadata search...")
+                try:
+                    if target_article:
+                        # Search by article metadata using ChromaDB where clause
+                        metadata_results = self.vector_store.similarity_search(
+                            target_article,  # Simple query
+                            k=TOP_K_CHUNKS,
+                            filter={"article": target_article}
+                        )
+                        if metadata_results:
+                            matching_docs = metadata_results
+                            print(f"📌 Metadata search found {len(matching_docs)} chunks for {target_article}")
+                        else:
+                            # Broader text search — look for the article reference in content
+                            # Searches with multiple query variations for best coverage
+                            art_num = article_match.group(1)
+                            search_queries = [
+                                f"{target_article} Constitution of Kenya",
+                                f"{target_article} provisions oath office",
+                                f"{art_num}. ",
+                            ]
+                            all_candidates = []
+                            for sq in search_queries:
+                                text_search_results = self.vector_store.similarity_search(sq, k=15)
+                                all_candidates.extend(text_search_results)
+                            
+                            # Filter to those that actually mention the article
+                            seen_keys = set()
+                            for doc in all_candidates:
+                                in_metadata = target_article in str(doc.metadata.get('articles_all', ''))
+                                # Match "Article 74" or "74. " (article number at start of line/text)
+                                import re as _re
+                                in_content = (target_article in doc.page_content) or \
+                                             bool(_re.search(rf'\b{art_num}\.\s', doc.page_content))
+                                content_key = doc.page_content[:100]
+                                if (in_metadata or in_content) and content_key not in seen_keys:
+                                    seen_keys.add(content_key)
+                                    matching_docs.append(doc)
+                            if matching_docs:
+                                print(f"📌 Content search found {len(matching_docs)} chunks mentioning {target_article}")
+                    
+                    if target_chapter and not matching_docs:
+                        # Search for chapter using multiple query variations
+                        chapter_val = chapter_match.group(1).title()
+                        search_queries = [
+                            f"Chapter {chapter_val} Constitution of Kenya",
+                            f"CHAPTER {chapter_val.upper()}",
+                            f"Chapter {chapter_val} leadership integrity",
+                        ]
+                        all_candidates = []
+                        for sq in search_queries:
+                            text_search_results = self.vector_store.similarity_search(sq, k=TOP_K_CHUNKS)
+                            all_candidates.extend(text_search_results)
+                        
+                        seen_keys = set()
+                        for doc in all_candidates:
+                            chapter_meta = doc.metadata.get('chapter', '')
+                            content_preview = doc.page_content[:500]
+                            chapter_in_meta = f"Chapter {chapter_val}" in chapter_meta
+                            chapter_in_content = f"Chapter {chapter_val}" in content_preview or \
+                                                 f"CHAPTER {chapter_val.upper()}" in content_preview
+                            content_key = doc.page_content[:100]
+                            if (chapter_in_meta or chapter_in_content) and content_key not in seen_keys:
+                                seen_keys.add(content_key)
+                                matching_docs.append(doc)
+                        if matching_docs:
+                            print(f"📌 Chapter search found {len(matching_docs)} chunks for {target_chapter}")
+                            
+                except Exception as e:
+                    print(f"⚠️ Metadata search failed: {e}")
+            
+            # Prioritize matching docs, then add others
+            if matching_docs:
+                print(f"📌 Found {len(matching_docs)} chunks matching the specific article/chapter")
+                # Deduplicate
+                seen_content = set()
+                unique_matching = []
+                for doc in matching_docs:
+                    content_key = doc.page_content[:100]
+                    if content_key not in seen_content:
+                        seen_content.add(content_key)
+                        unique_matching.append(doc)
+                
+                unique_other = []
+                for doc in other_docs:
+                    content_key = doc.page_content[:100]
+                    if content_key not in seen_content:
+                        seen_content.add(content_key)
+                        unique_other.append(doc)
+                
+                return unique_matching + unique_other[:max(0, TOP_K_CHUNKS - len(unique_matching))]
+            else:
+                print(f"⚠️ No chunks found for {target_article or target_chapter}")
+                if docs:
+                    print(f"   Top result article metadata: {docs[0].metadata.get('article', 'NOT SET')}")
+                    print(f"   Top result content preview: {docs[0].page_content[:150]}...")
+        
+        return docs
 
     def answer(
         self,

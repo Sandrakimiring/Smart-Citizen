@@ -50,9 +50,24 @@ vectorstores/
 
 # Important: PDF files in data/raw/ ARE tracked and will be deployed
 # This is necessary for vector store rebuild on Render
- DEPLOY.md
- SYSTEM_MAP.md
- ARCHITECTURE.md
- FIXES_APPLIED.md
- DEPLOYMENT_CHECKLIST.md
- DEPLOYMENT_SUMMARY.md
+
+# --- Documentation / Markdown ---
+# Ignore all markdown files except README.md
+*.md
+!README.md
+
+# --- Build artifacts ---
+build/
+dist/
+*.egg
+
+# --- Test / Coverage ---
+.coverage
+htmlcov/
+.tox/
+
+# --- Temporary files ---
+*.tmp
+*.bak
+*.swp
+*~
