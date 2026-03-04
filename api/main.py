@@ -1,10 +1,18 @@
 """FastAPI backend for Haki Sovereign AI."""
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Literal, Optional, List, Dict, Any, Union
 import os
+import logging
+
+import httpx
+
+# Sentinel webhook URL (set via env var in production)
+SENTINEL_URL = os.environ.get("SENTINEL_URL", "http://localhost:8001")
+
+logger = logging.getLogger(__name__)
 
 from src.haki_engine import create_engine
 
@@ -50,6 +58,10 @@ class AskRequest(BaseModel):
         True, 
         description="Automatically detect input language"
     )
+    county: Optional[str] = Field(
+        None,
+        description="User's county (optional, for Nyayo Sentinel analytics)"
+    )
 
 class Source(BaseModel):
     document_title: str
@@ -83,8 +95,29 @@ async def health_check():
         "documents": ["Constitution of Kenya 2010"]
     }
 
+async def _send_to_sentinel(
+    question: str, answer: str, supported: bool, language: str, county: Optional[str] = None
+):
+    """Fire-and-forget webhook to Nyayo Sentinel for signal analysis."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(
+                f"{SENTINEL_URL}/ingest",
+                json={
+                    "question": question,
+                    "answer": answer,
+                    "supported": supported,
+                    "language": language,
+                    "county": county,
+                },
+            )
+    except Exception as e:
+        # Never let Sentinel failures affect the citizen's response
+        logger.warning(f"Sentinel webhook failed (non-blocking): {e}")
+
+
 @app.post("/api/ask", response_model=AskResponse)
-async def ask_question(request: AskRequest):
+async def ask_question(request: AskRequest, background_tasks: BackgroundTasks):
     """
     Ask a question about Kenyan government documents.
     
@@ -133,6 +166,16 @@ async def ask_question(request: AskRequest):
             )
             for s in response.sources
         ]
+        
+        # 🔔 Send signal to Nyayo Sentinel (background, non-blocking)
+        background_tasks.add_task(
+            _send_to_sentinel,
+            question=request.question,
+            answer=response.answer,
+            supported=response.supported,
+            language=response.input_language_detected,
+            county=request.county,
+        )
         
         return AskResponse(
             answer=response.answer,

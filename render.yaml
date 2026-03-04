@@ -1,9 +1,10 @@
 services:
+  # ── MVP 1: Haki Sovereign AI Engine (already deployed) ──────────────
   - type: web
     name: smart-citizen-api
     runtime: python
-    region: oregon  # or your preferred region
-    plan: free  # or starter/standard for production
+    region: oregon
+    plan: free
     branch: main
     buildCommand: "./build.sh"
     startCommand: "uvicorn api.main:app --host 0.0.0.0 --port $PORT"
@@ -12,5 +13,24 @@ services:
         value: 3.10.0
       - key: OPENAI_API_KEY
         sync: false  # Set this manually in Render dashboard
+      - key: SENTINEL_URL
+        sync: false  # Set to the Sentinel service URL after deploying it
+    autoDeploy: true
+    healthCheckPath: /health
+
+  # ── MVP 2: Nyayo Sentinel Dashboard API ─────────────────────────────
+  - type: web
+    name: nyayo-sentinel-api
+    runtime: python
+    region: oregon
+    plan: free
+    branch: main
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn api.sentinel_api:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.0
+      - key: OPENAI_API_KEY
+        sync: false  # Same key, set in Render dashboard
     autoDeploy: true
     healthCheckPath: /health
